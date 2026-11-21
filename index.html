@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>מיני גולף</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:#0d1a10;font-family:'Segoe UI',Arial,sans-serif;color:#eef7ea;touch-action:none;user-select:none}
+#wrap{height:100%;display:flex;flex-direction:column;align-items:center;max-width:440px;margin:0 auto;padding:6px}
+h1{font-size:23px;font-weight:800;background:linear-gradient(90deg,#80ed99,#ffd60a);-webkit-background-clip:text;background-clip:text;color:transparent}
+#hud{display:flex;gap:8px;margin:6px 0;flex-wrap:wrap;justify-content:center}
+.pill{background:#1a2e1e;border-radius:20px;padding:5px 12px;font-size:13px;font-weight:700}
+canvas{display:block;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.45)}
+#msg{min-height:22px;font-weight:700;color:#ffd60a;margin-top:6px;text-align:center;font-size:15px}
+.ov{position:fixed;inset:0;background:rgba(6,14,8,.9);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:5;text-align:center;padding:20px}
+.ov h2{font-size:30px;background:linear-gradient(90deg,#80ed99,#ffd60a);-webkit-background-clip:text;background-clip:text;color:transparent}
+.ov p{font-size:16px;color:#c8e6c9;max-width:330px;line-height:1.5}
+.btn{background:linear-gradient(135deg,#80ed99,#38a3a5);color:#06210f;border:none;padding:14px 38px;font-size:19px;font-weight:800;border-radius:40px;cursor:pointer;box-shadow:0 6px 22px rgba(128,237,153,.35)}
+.hidden{display:none}
+#hint{font-size:12px;color:#6a9a72;margin-top:5px}
+</style>
+</head>
+<body>
+<div id="wrap">
+<h1>מיני גולף</h1>
+<div id="hud">
+  <div class="pill" id="hole">גומה 1/5</div>
+  <div class="pill" id="par">פאר 2</div>
+  <div class="pill" id="strokes">מכות: 0</div>
+  <div class="pill" id="total">סה"כ: 0</div>
+</div>
+<canvas id="c"></canvas>
+<div id="msg"></div>
+<div id="hint">משכו מהכדור אחורה ושחררו כדי לזרוק</div>
+</div>
+<div class="ov" id="startOv">
+  <h2>מיני גולף</h2>
+  <p>5 גומות מאתגרות! משכו את הכדור אחורה כמו קלע, כוונו ושחררו. פחות מכות = יותר טוב.</p>
+  <button class="btn" id="startBtn">למגרש!</button>
+</div>
+<div class="ov hidden" id="holeOv">
+  <h2 id="holeTitle"></h2>
+  <p id="holeText"></p>
+  <button class="btn" id="nextBtn">לגומה הבאה</button>
+</div>
+<div class="ov hidden" id="endOv">
+  <h2>סיום מסלול!</h2>
+  <p id="endText"></p>
+  <button class="btn" id="againBtn">מסלול חדש</button>
+</div>
+<script>
+(function(){
+'use strict';
+var cv=document.getElementById('c'),x=cv.getContext('2d');x.direction='ltr';
+var W=Math.min(window.innerWidth-12,420),H=Math.min(window.innerHeight-160,620);
+if(H<W*1.25)H=W*1.25;
+cv.width=W;cv.height=H;
+var HOLES=[
+ {par:2,ball:[W*0.5,H*0.85],hole:[W*0.5,H*0.15],walls:[],sand:[]},
+ {par:3,ball:[W*0.5,H*0.88],hole:[W*0.5,H*0.12],walls:[[0,H*0.5,W*0.62,16],[W*0.38,H*0.28,W*0.62,16]],sand:[]},
+ {par:3,ball:[W*0.15,H*0.85],hole:[W*0.85,H*0.15],walls:[[W*0.35,H*0.35,16,H*0.4]],sand:[[W*0.55,H*0.55,W*0.3,H*0.18]]},
+ {par:3,ball:[W*0.5,H*0.9],hole:[W*0.5,H*0.1],walls:[[0,H*0.62,W*0.45,16],[W*0.55,H*0.42,W*0.45,16],[0,H*0.22,W*0.45,16]],sand:[]},
+ {par:4,ball:[W*0.5,H*0.88],hole:[W*0.5,H*0.12],walls:[[W*0.2,H*0.3,W*0.6,16],[W*0.2,H*0.55,W*0.6,16]],sand:[[W*0.05,H*0.68,W*0.35,H*0.14],[W*0.6,H*0.68,W*0.35,H*0.14]]}
+];
+var hole=0,strokes=0,totals=[],ball={x:0,y:0,vx:0,vy:0},dragging=false,dragStart=null,dragNow=null,playing=false,sunk=false,moveT=0;
+var bestTotal=localStorage.getItem('golf_best');
+function loadHole(i){
+  var h=HOLES[i];
+  ball={x:h.ball[0],y:h.ball[1],vx:0,vy:0};
+  strokes=0;sunk=false;
+  document.getElementById('hole').textContent='גומה '+(i+1)+'/'+HOLES.length;
+  document.getElementById('par').textContent='פאר '+h.par;
+  document.getElementById('strokes').textContent='מכות: 0';
+  document.getElementById('msg').textContent='';
+}
+function updateTotal(){
+  var t=totals.reduce(function(a,b){return a+b;},0);
+  document.getElementById('total').textContent='סה"כ: '+t;
+}
+function rectHit(bx,by,w){
+  return bx>w[0]&&bx<w[0]+w[2]&&by>w[1]&&by<w[1]+w[3];
+}
+function step(){
+  if(Math.abs(ball.vx)>0.02||Math.abs(ball.vy)>0.02){
+    var h=HOLES[hole];
+    var inSand=h.sand.some(function(s){return rectHit(ball.x,ball.y,s);});
+    var fr=inSand?0.9:0.985;
+    ball.vx*=fr;ball.vy*=fr;
+    ball.x+=ball.vx;ball.y+=ball.vy;
+    var r=9;
+    if(ball.x<r){ball.x=r;ball.vx=-ball.vx*0.7;}
+    if(ball.x>W-r){ball.x=W-r;ball.vx=-ball.vx*0.7;}
+    if(ball.y<r){ball.y=r;ball.vy=-ball.vy*0.7;}
+    if(ball.y>H-r){ball.y=H-r;ball.vy=-ball.vy*0.7;}
+    h.walls.forEach(function(w){
+      if(rectHit(ball.x,ball.y,[w[0]-r,w[1]-r,w[2]+r*2,w[3]+r*2])){
+        var fromSide=ball.x<w[0]||ball.x>w[0]+w[2]||ball.x-r<w[0]||ball.x+r>w[0]+w[2];
+        var overlapL=ball.x-(w[0]-r),overlapR=(w[0]+w[2]+r)-ball.x;
+        var overlapT=ball.y-(w[1]-r),overlapB=(w[1]+w[3]+r)-ball.y;
+        var minX=Math.min(overlapL,overlapR),minY=Math.min(overlapT,overlapB);
+        if(minX<minY){ball.vx=-ball.vx*0.75;ball.x+=overlapL<overlapR?-overlapL:overlapR;}
+        else{ball.vy=-ball.vy*0.75;ball.y+=overlapT<overlapB?-overlapT:overlapB;}
+      }
+    });
+    var hx=h.hole[0],hy=h.hole[1];
+    var dist=Math.hypot(ball.x-hx,ball.y-hy);
+    var speed=Math.hypot(ball.vx,ball.vy);
+    if(dist<13&&speed<6){sunk=true;ball.x=hx;ball.y=hy;ball.vx=0;ball.vy=0;holeDone();}
+    if(Math.abs(ball.vx)<0.02&&Math.abs(ball.vy)<0.02){ball.vx=0;ball.vy=0;}
+  }
+}
+function holeDone(){
+  totals.push(strokes);updateTotal();
+  var h=HOLES[hole];
+  var diff=strokes-h.par;
+  var label=diff<=-2?'איגל!':diff===-1?'ברדי!':diff===0?'פאר בדיוק':diff===1?'בוגי':'+'+diff;
+  document.getElementById('holeTitle').textContent='הגומה בכיס! '+label;
+  document.getElementById('holeText').textContent=strokes+' מכות (פאר '+h.par+')';
+  setTimeout(function(){
+    if(hole+1>=HOLES.length){
+      var t=totals.reduce(function(a,b){return a+b;},0);
+      var parT=HOLES.reduce(function(a,b){return a+b.par;},0);
+      var rec=false;
+      if(!bestTotal||t<+bestTotal){bestTotal=t;localStorage.setItem('golf_best',t);rec=true;}
+      document.getElementById('endText').textContent='סיימתם את המסלול ב-'+t+' מכות (פאר '+parT+').'+(rec?' שיא חדש!':' שיא: '+bestTotal);
+      document.getElementById('endOv').classList.remove('hidden');
+    }else{
+      document.getElementById('holeOv').classList.remove('hidden');
+    }
+  },900);
+}
+function draw(t){
+  var grd=x.createLinearGradient(0,0,0,H);
+  grd.addColorStop(0,'#2d6a4f');grd.addColorStop(1,'#1b4332');
+  x.fillStyle=grd;x.fillRect(0,0,W,H);
+  x.fillStyle='rgba(255,255,255,0.03)';
+  for(var i=0;i<40;i++){var gx=(i*97)%W,gy=(i*173)%H;x.fillRect(gx,gy,3,3);}
+  var h=HOLES[hole];
+  h.sand.forEach(function(s){
+    x.fillStyle='#e9d8a6';
+    x.beginPath();
+    if(x.roundRect)x.roundRect(s[0],s[1],s[2],s[3],20);else x.rect(s[0],s[1],s[2],s[3]);
+    x.fill();
+    x.fillStyle='rgba(180,150,90,0.5)';
+    for(var j=0;j<12;j++){x.beginPath();x.arc(s[0]+(j*53)%s[2],s[1]+(j*31)%s[3],2,0,7);x.fill();}
+  });
+  h.walls.forEach(function(w){
+    var wg=x.createLinearGradient(w[0],w[1],w[0],w[1]+w[3]);
+    wg.addColorStop(0,'#8d6a3f');wg.addColorStop(1,'#5e4023');
+    x.fillStyle=wg;x.fillRect(w[0],w[1],w[2],w[3]);
+    x.fillStyle='rgba(255,255,255,0.12)';x.fillRect(w[0],w[1],w[2],3);
+  });
+  var hx=h.hole[0],hy=h.hole[1];
+  x.fillStyle='rgba(0,0,0,0.5)';
+  x.beginPath();x.arc(hx,hy,13,0,7);x.fill();
+  x.strokeStyle='#0a0a0a';x.lineWidth=2;
+  x.beginPath();x.arc(hx,hy,13,0,7);x.stroke();
+  x.strokeStyle='#ddd';x.lineWidth=2.5;
+  x.beginPath();x.moveTo(hx,hy);x.lineTo(hx,hy-44);x.stroke();
+  x.fillStyle='#ff4d6d';
+  x.beginPath();x.moveTo(hx,hy-44);x.lineTo(hx+26,hy-37);x.lineTo(hx,hy-30);x.closePath();x.fill();
+  if(dragging&&dragNow){
+    var vx=(dragStart.x-dragNow.x)*0.22,vy=(dragStart.y-dragNow.y)*0.22;
+    var px=ball.x,py=ball.y,tvx=vx,tvy=vy;
+    x.strokeStyle='rgba(255,255,255,0.5)';x.setLineDash([5,6]);x.lineWidth=2;
+    x.beginPath();x.moveTo(ball.x,ball.y);
+    for(var k=0;k<16;k++){px+=tvx;py+=tvy;tvx*=0.985;tvy*=0.985;x.lineTo(px,py);}
+    x.stroke();x.setLineDash([]);
+    x.strokeStyle='#ffd60a';x.lineWidth=3;
+    x.beginPath();x.moveTo(ball.x,ball.y);x.lineTo(dragNow.x,dragNow.y);x.stroke();
+  }
+  if(!sunk){
+    x.fillStyle='rgba(0,0,0,0.35)';
+    x.beginPath();x.ellipse(ball.x+2,ball.y+4,9,5,0,0,7);x.fill();
+    var bg=x.createRadialGradient(ball.x-3,ball.y-3,1,ball.x,ball.y,10);
+    bg.addColorStop(0,'#ffffff');bg.addColorStop(1,'#c9d4da');
+    x.fillStyle=bg;
+    x.beginPath();x.arc(ball.x,ball.y,9,0,7);x.fill();
+  }
+}
+(function loop(){step();draw();requestAnimationFrame(loop);})();
+function pos(e){var r=cv.getBoundingClientRect();var t=e.changedTouches?e.changedTouches[0]:e;return{x:t.clientX-r.left,y:t.clientY-r.top};}
+cv.addEventListener('touchstart',function(e){
+  e.preventDefault();
+  if(!playing||sunk)return;
+  if(Math.abs(ball.vx)>0.02||Math.abs(ball.vy)>0.02)return;
+  var p=pos(e);
+  if(Math.hypot(p.x-ball.x,p.y-ball.y)<34){dragging=true;dragStart={x:ball.x,y:ball.y};dragNow=p;}
+},{passive:false});
+cv.addEventListener('touchmove',function(e){e.preventDefault();if(dragging)dragNow=pos(e);},{passive:false});
+cv.addEventListener('touchend',function(e){
+  e.preventDefault();
+  if(!dragging)return;
+  dragging=false;
+  var vx=(dragStart.x-dragNow.x)*0.22,vy=(dragStart.y-dragNow.y)*0.22;
+  if(Math.hypot(vx,vy)>1.2){
+    var sp=Math.hypot(vx,vy),max=16;
+    if(sp>max){vx*=max/sp;vy*=max/sp;}
+    ball.vx=vx;ball.vy=vy;
+    strokes++;
+    document.getElementById('strokes').textContent='מכות: '+strokes;
+  }
+  dragNow=null;
+},{passive:false});
+document.getElementById('startBtn').addEventListener('click',function(){document.getElementById('startOv').classList.add('hidden');playing=true;});
+document.getElementById('nextBtn').addEventListener('click',function(){document.getElementById('holeOv').classList.add('hidden');hole++;loadHole(hole);});
+document.getElementById('againBtn').addEventListener('click',function(){document.getElementById('endOv').classList.add('hidden');hole=0;totals=[];updateTotal();loadHole(0);});
+loadHole(0);
+})();
+</script>
+</body>
+</html>
